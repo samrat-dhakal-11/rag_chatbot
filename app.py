@@ -15,7 +15,7 @@ st.title("📄 Multi-PDF RAG Assistant")
 # 2. Initialize LlamaParse
 if "parser" not in st.session_state:
     st.session_state["parser"] = LlamaParse(
-        api_key=os.getenv("LLAMA_CLOUD_API_KEY"), 
+        api_key=os.getenv("LLAMA_PARSE_KEY"), 
         result_type="markdown"
     )
 
