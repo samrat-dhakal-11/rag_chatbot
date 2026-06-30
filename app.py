@@ -2,74 +2,76 @@ import streamlit as st
 import os
 from dotenv import load_dotenv
 from llama_parse import LlamaParse
-from llama_index.core import VectorStoreIndex
+from llama_index.core import VectorStoreIndex, Settings, ChatPromptTemplate
+from llama_index.core.memory import ChatMemoryBuffer
+from llama_index.llms.gemini import Gemini
+from llama_index.embeddings.gemini import GeminiEmbedding
 import nest_asyncio
 
 # Setup
 nest_asyncio.apply()
 
-# --- 1. API Key Load गर्ने भाग ---
-# यहाँ तपाईंको .env फाइलको पूर्ण Path दिनुहोस्
+# --- 1. Environment ---
 ENV_PATH = "/Users/pratiksha/nwee/helloo_there/.env"
 load_dotenv(dotenv_path=ENV_PATH)
 
-# Environment variable लिने
+os.environ["GOOGLE_API_KEY"] = os.getenv("api_key", "")
 api_key = os.getenv("LLAMA_PARSE_KEY")
 
-st.set_page_config(page_title="Multi-PDF RAG", layout="wide")
-st.title("📄 Multi-PDF RAG Assistant")
+# --- 2. Configure Gemini 1.5 Flash ---
+Settings.llm = Gemini(model="models/gemini-1.5-flash")
+Settings.embed_model = GeminiEmbedding(model_name="models/embedding-001")
 
-# --- 2. LlamaParse को लागि Error handling ---
-if not api_key:
-    st.error(f"API Key भेटिएन! कृपया {ENV_PATH} मा 'LLAMA_PARSE_KEY' सहि छ कि छैन चेक गर्नुहोस्।")
-    st.stop()
+st.set_page_config(page_title="Gemini 1.5 Flash RAG", layout="wide")
+st.title("📄 Multi-PDF RAG Assistant (Flash 1.5)")
 
+# --- 3. Session State Management ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "engine" not in st.session_state:
+    st.session_state.engine = None
+
+# Sidebar for "New Chat"
+if st.sidebar.button("New Chat"):
+    st.session_state.messages = []
+    st.rerun()
+
+# --- 4. Initialization ---
 if "parser" not in st.session_state:
-    st.session_state["parser"] = LlamaParse(
-        api_key=api_key, 
-        result_type="markdown"
-    )
+    st.session_state["parser"] = LlamaParse(api_key=api_key, result_type="markdown")
 
-# --- 3. File Upload ---
+# --- 5. File Upload & Processing ---
 uploaded_files = st.file_uploader("Upload PDFs", type=["pdf"], accept_multiple_files=True)
 
-if uploaded_files:
-    if st.button("Process Documents"):
-        all_docs = []
-        for file in uploaded_files:
-            # Temporary save
-            file_path = f"./{file.name}"
-            with open(file_path, "wb") as f:
-                f.write(file.getbuffer())
-            
-            # Parsing
-            with st.spinner(f"Parsing {file.name}..."):
-                try:
-                    docs = st.session_state["parser"].load_data(file_path)
-                    all_docs.extend(docs)
-                    st.write(f"Parsed {file.name}")
-                except Exception as e:
-                    st.error(f"Error parsing {file.name}: {e}")
-        
-        # 4. Indexing
-        if all_docs:
-            with st.spinner("Creating Index..."):
-                index = VectorStoreIndex.from_documents(all_docs)
-                st.session_state["engine"] = index.as_query_engine()
-                st.session_state["docs"] = all_docs
-                st.success("Documents processed! You can now chat.")
+if uploaded_files and st.button("Process Documents"):
+    all_docs = []
+    for file in uploaded_files:
+        with open(file.name, "wb") as f:
+            f.write(file.getbuffer())
+        with st.spinner(f"Parsing {file.name}..."):
+            docs = st.session_state["parser"].load_data(file.name)
+            all_docs.extend(docs)
+    
+    with st.spinner("Creating Index..."):
+        index = VectorStoreIndex.from_documents(all_docs)
+        # ChatEngine ले history आफैं manage गर्छ
+        st.session_state.engine = index.as_chat_engine(chat_mode="context", llm=Settings.llm)
+        st.success("Ready to chat!")
 
-# --- 5. Chat Interface ---
-if "engine" in st.session_state:
-    query = st.chat_input("Ask a question about your uploaded PDFs:")
-    if query:
-        st.chat_message("user").write(query)
-        with st.spinner("Thinking..."):
-            response = st.session_state["engine"].query(query)
-            st.chat_message("assistant").write(str(response))
-            
-    # View Parsed content (Optional)
-    if st.checkbox("Show Parsed Content"):
-        for doc in st.session_state["docs"]:
-            st.markdown("### Parsed Chunk")
-            st.markdown(doc.text[:500] + "...")
+# --- 6. Chat History Interface ---
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+if query := st.chat_input("Ask a question:"):
+    st.session_state.messages.append({"role": "user", "content": query})
+    with st.chat_message("user"):
+        st.markdown(query)
+
+    if st.session_state.engine:
+        with st.chat_message("assistant"):
+            response = st.session_state.engine.chat(query)
+            st.markdown(str(response))
+            st.session_state.messages.append({"role": "assistant", "content": str(response)})
+    else:
+        st.warning("Please upload and process PDFs first!")
