@@ -1,0 +1,6 @@
+streamlit
+llama-parse
+google-generativeai
+chromadb
+langchain
+python-dotenv
